@@ -1,7 +1,7 @@
 const config = require('../config');
 const { generateWAMessageFromContent, prepareWAMessageMedia } = require('@whiskeysockets/baileys');
 
-const ALIVE_TITLE = 'ɴᴏᴍᴏ ᴍᴅ </> ᴀʟɪᴠᴇ';
+const ALIVE_TITLE = 'ǫᴜᴇᴇɴ ʜɪʀᴜ ᴍᴅ </> ᴀʟɪᴠᴇ';
 
 /* Small caps helper */
 const SC = {
