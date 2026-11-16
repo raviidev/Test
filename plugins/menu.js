@@ -3,7 +3,7 @@ const path = require('path');
 const { generateWAMessageFromContent, prepareWAMessageMedia } = require('@whiskeysockets/baileys');
 const config = require('../config');
 
-const MENU_TITLE = 'ɴᴏᴍᴏ ᴍᴅ </> ᴍᴜʟᴛɪᴅᴇᴠɪᴄᴇ';
+const MENU_TITLE = 'ǫᴜᴇᴇɴ ʜɪʀᴜ ᴍᴅ </> ᴍᴜʟᴛɪᴅᴇᴠɪᴄᴇ';
 
 /* ------------------------------------------------------------------ */
 /*  MENU CATEGORIES (4 k witarai) - number eka = reply karana number    */
