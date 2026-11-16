@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@octokit/rest": "^20.0.2",
-    "@whiskeysockets/baileys": "^6.7.9",
+    "@whiskeysockets/baileys": "latest",
     "acrcloud": "^1.4.0",
     "axios": "^1.7.0",
     "cheerio": "^1.0.0",
@@ -28,7 +28,7 @@
     "yt-search": "^2.13.1"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=18.x"
   },
   "keywords": [
     "whatsapp",

@@ -14,11 +14,12 @@ module.exports = {
     OMDB_API_KEY: 'c51d1824',
 
     // ---- Dashboard eken maru karanna puluwan settings (default values) ----
+    mode: 'public', // 'public' = inbox + group hamotama wada | 'private' = owner witarai
     AUTO_STATUS_SEEN: false,
     AUTO_STATUS_REACT: false,
     STATUS_EMOJIS: '💚,❤️,🔥,😍,👏,😎',
     AUTO_READ: false,
-    ALWAYS_ONLINE: false,
+    ALWAYS_ONLINE: true,
     AUTO_TYPING: false,
     ANTI_DELETE: true,
     ANTI_EDIT: true,

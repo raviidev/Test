@@ -1,7 +1,7 @@
 {
-  "prefix": ",",
-  "antidelete": false,
+  "prefix": ".",
+  "antidelete": true,
   "autoread": false,
   "autoreact": false,
-  "mode": "private"
+  "mode": "public"
 }

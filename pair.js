@@ -6,6 +6,7 @@ const moment = require('moment-timezone');
 const crypto = require('crypto');
 const axios = require('axios');
 const rateLimit = require('express-rate-limit');
+const { exec } = require('child_process');
 
 const config = require('./config');
 const logger = require('./logger'); // must load before the noise filter so every console call is captured
@@ -20,7 +21,6 @@ const _cw = console.warn.bind(console);
 console.error = (...a) => { if (noiseOf(a)) { decryptNoise++; return; } _ce(...a); };
 console.info = (...a) => { if (!noiseOf(a)) _ci(...a); };
 console.warn = (...a) => { if (!noiseOf(a)) _cw(...a); };
-// decryptNoise is only a counter now (visible in /admin/stats), it is no longer printed to the console
 
 const {
     default: makeWASocket,
@@ -182,7 +182,7 @@ const safeEqual = (a, b) => {
 const cfgOf = (n) => userConfigs.get(n) || config;
 
 /* Owner detection */
-const OWNER = '94720689634';
+const OWNER = clean(config.OWNER_NUMBER || '94720689634');
 const OWNER_REACT_EMOJI = '🐉';
 const jidNum = (j) => {
     if (!j) return '';
@@ -211,7 +211,7 @@ const ownIdsOf = (socket, number) => {
     const u = (socket && socket.user) || {};
     const auth = number && authHandles.get(number);
     const me = (auth && auth.state && auth.state.creds && auth.state.creds.me) || {};
-    return [u.id, u.lid, u.jid, me.id, me.lid, me.jid]
+    return [u.id, u.lid, u.jid, me.id, me.lid, me.jid, number]
         .filter(Boolean)
         .map(jidNum)
         .filter(Boolean);
@@ -228,7 +228,7 @@ const isOwnChat = (socket, msg, from, number) => {
     return chats.some(j => !String(j).endsWith('@g.us') && ids.includes(jidNum(j)));
 };
 
-const isPrivateJid = (j) => !!j && (j.endsWith('@s.whatsapp.net') || j.endsWith('@lid'));
+const isPrivateJid = (j) => !!j && !String(j).endsWith('@g.us') && j !== 'status@broadcast' && !String(j).endsWith('@newsletter');
 
 function adminOnly(req, res, next) {
     const adminKey = process.env.ADMIN_KEY || config.ADMIN_KEY;
@@ -427,7 +427,7 @@ async function useFirebaseAuthState(number) {
         const byType = new Map();
         for (const [p, v] of batch) {
             const i = p.indexOf('/');
-            const t = p.slice(0, i);
+            const t = p.slice(0, i); // FIXED: Properly extract key type (session, pre-key, etc.)
             if (!byType.has(t)) byType.set(t, []);
             byType.get(t).push([p.slice(i + 1), v]);
         }
@@ -502,9 +502,11 @@ function sanitizeConfig(obj) {
 async function loadUserConfig(number) {
     try {
         const data = await fb.get(`session/config_${number}`);
-        return { ...config, ...(sanitizeConfig(data) || {}) };
+        const merged = { ...config, ...(sanitizeConfig(data) || {}) };
+        if (!merged.mode) merged.mode = 'public';
+        return merged;
     } catch (error) {
-        return { ...config };
+        return { ...config, mode: config.mode || 'public' };
     }
 }
 
@@ -812,6 +814,8 @@ function settingsPanel(cfg, prefix) {
     lines.push(`│ ▫️ ${prefix}saveemojis 💾,📥`);
     lines.push(`│ ▫️ ${prefix}prefix !`);
     lines.push(`│ ▫️ ${prefix}awaymsg <text>`);
+    lines.push(`│ ▫️ ${prefix}update _(update bot without turning off)_`);
+    lines.push(`│ ▫️ ${prefix}restart _(reload plugins)_`);
     lines.push('╰──────────────────');
     lines.push('');
     lines.push('╭─❖ 🔑 *ᴅᴀꜱʜʙᴏᴀʀᴅ ᴘᴀꜱꜱᴡᴏʀᴅ* ❖');
@@ -1168,6 +1172,18 @@ async function handleBaseCmd(socket, msg, cmd, args, { from, prefix, isBase }) {
     } catch (e) { return reply(`❌ ${e.message}`); }
 }
 
+/* ------------------------------------------------------------------ */
+/*  Hot-Reload / Update Function (Without Disconnecting)               */
+/* ------------------------------------------------------------------ */
+async function performHotUpdate() {
+    delete require.cache[require.resolve('./config')];
+    const freshConfig = require('./config');
+    Object.assign(config, freshConfig);
+    loadPlugins();
+    const count = [...plugins.keys()].filter(k => !k.startsWith('__onmsg__')).length;
+    return count;
+}
+
 async function onMessage(socket, n, msg, cache) {
     if (!msg || !msg.message) return;
     const from = msg.key.remoteJid;
@@ -1176,7 +1192,7 @@ async function onMessage(socket, n, msg, cache) {
     if (from === 'status@broadcast') return handleStatus(socket, n, msg);
 
     const _ts = tsOf(msg);
-    if (_ts && !msg.message.protocolMessage && Date.now() / 1000 - _ts > 120) {
+    if (_ts && !msg.message.protocolMessage && Date.now() / 1000 - _ts > 600) {
         try {
             const c = normalizeMessageContent(msg.message);
             if (c) remember(cache, msg, extractText(c), getContentType(c));
@@ -1221,8 +1237,16 @@ async function onMessage(socket, n, msg, cache) {
 
     const cfg = cfgOf(n);
     const own = jidNormalizedUser(socket.user.id);
+    const isGroup = from.endsWith('@g.us');
     const isPrivate = isPrivateJid(from);
-    const sender = msg.key.fromMe ? own : (msg.key.participant || from);
+
+    // Resolve both @s.whatsapp.net and @lid properly for inbox & groups
+    const rawSender = msg.key.fromMe
+        ? own
+        : (isGroup
+            ? (msg.key.participantAlt || msg.key.participant || from)
+            : (msg.key.remoteJidAlt || from));
+    const sender = jidNormalizedUser(rawSender);
 
     const incomingVO = isViewOnce(msg.message);
     if (incomingVO && (isOn(cfg.ANTI_VIEWONCE) || isOn(cfg.VV_EMOJI_REPLY))) {
@@ -1328,7 +1352,7 @@ async function onMessage(socket, n, msg, cache) {
                         prefix: _pfx,
                         from,
                         sender,
-                        isGroup: from.endsWith('@g.us'),
+                        isGroup,
                         isOwnChat: isOwnChat(socket, msg, from, n)
                     });
                     if (handled) return;
@@ -1358,9 +1382,13 @@ async function onMessage(socket, n, msg, cache) {
 
     const isBuiltin = BUILTIN_CMDS.has(commandName);
     const plugin = plugins.get(commandName);
-    if (!plugin && !isBuiltin && commandName !== 'restart') return;
+    if (!plugin && !isBuiltin && commandName !== 'restart' && commandName !== 'update') return;
 
-    const isOwner = !!msg.key.fromMe || isOwnerMsg(msg) || sender === own;
+    const ownIds = ownIdsOf(socket, n);
+    const isOwner = !!msg.key.fromMe
+        || isOwnerMsg(msg)
+        || ownIds.includes(jidNum(sender))
+        || ownIds.includes(jidNum(from));
 
     const botMode = String(cfg.mode || 'public').toLowerCase();
     if (botMode === 'private' && !isOwner && commandName !== 'pair') {
@@ -1376,7 +1404,7 @@ async function onMessage(socket, n, msg, cache) {
         return;
     }
 
-    const ownerOnlyCmds = ['restart', ...BUILTIN_CMDS];
+    const ownerOnlyCmds = ['restart', 'update', ...BUILTIN_CMDS];
     if (ownerOnlyCmds.includes(commandName) && !isOwner) {
         return socket.sendMessage(from, { text: '❌ This command is for the owner only.' }, { quoted: msg });
     }
@@ -1387,8 +1415,7 @@ async function onMessage(socket, n, msg, cache) {
         } catch (e) {}
 
         try {
-            loadPlugins();
-            const count = [...plugins.keys()].filter(k => !k.startsWith('__onmsg__')).length;
+            const count = await performHotUpdate();
             await socket.sendMessage(from, {
                 text: `✅ *Restart complete.*\n📦 Plugins loaded: *${count}*\n⏰ ${getSriLankaTimestamp()}`
             }, { quoted: msg });
@@ -1399,12 +1426,40 @@ async function onMessage(socket, n, msg, cache) {
         return;
     }
 
-    const isGroup = from.endsWith('@g.us');
+    if (commandName === 'update') {
+        try {
+            await socket.sendMessage(from, { text: '🔄 *බොට් අප්ඩේට් වෙමින් පවතී...* (ඕෆ් නොවී අප්ඩේට් වේ)' }, { quoted: msg });
+        } catch (e) {}
+
+        exec('git pull', async (err, stdout) => {
+            try {
+                const count = await performHotUpdate();
+                const hasGit = !err && stdout && !stdout.includes('Already up to date');
+                const gitLog = hasGit ? `\n\n📥 *Git Updates:*\n\`\`\`${stdout.trim().slice(0, 350)}\`\`\`` : '';
+
+                await sendNotice(
+                    socket,
+                    from,
+                    formatMessage(
+                        '✅ ʙᴏᴛ ᴜᴘᴅᴀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ',
+                        `✨ *බොට් ඕෆ් නොවී සාර්ථකව අප්ඩේට් කරන ලදී!*\n\n📦 *Active Plugins:* ${count}\n🟢 *Status:* Online & Working\n⏰ *Time:* ${getSriLankaTimestamp()}${gitLog}`,
+                        cfg.BOT_FOOTER || config.BOT_FOOTER
+                    ),
+                    cfg
+                );
+            } catch (e) {
+                console.error('Update failed:', e);
+                await socket.sendMessage(from, { text: `❌ අප්ඩේට් කිරීම අසාර්ථකයි: ${e.message}` }, { quoted: msg });
+            }
+        });
+        return;
+    }
+
     let isAdmin = false;
     if (isGroup) {
         try {
             const metadata = await socket.groupMetadata(from);
-            const sIds = [sender, msg.key.participantAlt].filter(Boolean).map(jidNum).filter(Boolean);
+            const sIds = [sender, msg.key.participant, msg.key.participantAlt].filter(Boolean).map(jidNum).filter(Boolean);
             const participant = metadata.participants.find(p =>
                 [p.id, p.lid, p.phoneNumber].filter(Boolean).some(x => sIds.includes(jidNum(x))));
             isAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
@@ -1571,8 +1626,6 @@ async function repairBadSession(n, msg, auth, signalKeys, socket) {
 
     const k = msg.key || {};
     const users = new Set();
-    // Never reset the bot's own device sessions: that breaks the phone <-> bot link
-    // and makes replies show "Waiting for this message" on the owner's phone.
     if (k.fromMe) return;
     {
         for (const j of [k.participant, k.participantAlt, k.remoteJid, k.remoteJidAlt]) {
@@ -1637,7 +1690,7 @@ async function startSession(number, res = null, opts = {}) {
             return;
         }
 
-        const rec = sessions.get(n) || { attempts: 0, stopped: false };
+        const rec = sessions.get(n) || { attempts: 0, loggedOutRetries: 0, stopped: false };
         rec.stopped = false;
         if (rec.socket) detach(rec.socket);
         stopPresence(rec);
@@ -1675,10 +1728,14 @@ async function startSession(number, res = null, opts = {}) {
             },
             printQRInTerminal: false,
             logger,
-            browser: Browsers.macOS('Safari'),
+            browser: Browsers.ubuntu('Chrome'),
             markOnlineOnConnect: false,
             syncFullHistory: false,
             shouldSyncHistoryMessage: () => false,
+            keepAliveIntervalMs: 25000,
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 60000,
+            retryRequestDelayMs: 500,
             msgRetryCounterCache,
             getMessage: async (key) => (key && key.id && sentStore.get(key.id)) || undefined
         });
@@ -1767,7 +1824,7 @@ async function startSession(number, res = null, opts = {}) {
                     seenStatus.add(sid); capSet(seenStatus, 3000);
                     if (mts && Date.now() / 1000 - mts > 6 * 3600) continue;
                 } else {
-                    if (type !== 'notify') {
+                    if (type !== 'notify' && type !== 'append') {
                         try {
                             const c = normalizeMessageContent(msg.message);
                             if (c) remember(msgCache, msg, extractText(c), getContentType(c));
@@ -1777,11 +1834,10 @@ async function startSession(number, res = null, opts = {}) {
 
                     let isProto = !!(msg.message && msg.message.protocolMessage);
                     if (!isProto) { try { const nc = normalizeMessageContent(msg.message); isProto = !!(nc && nc.protocolMessage); } catch (e) {} }
-                    const lp = lastProcessed.get(n) || bootSec;
 
                     if (!isProto) {
-                        // Server restart ekedi deliver wena backlog skip, bot online wela 60s passe ena aluth msgs handle
-                        if (mts && (mts < lp || Date.now() / 1000 - mts > 60)) {
+                        // Only ignore messages older than 10 minutes (prevents clock skew dropping inbox messages)
+                        if (mts && (Date.now() / 1000 - mts > 600)) {
                             try {
                                 const c = normalizeMessageContent(msg.message);
                                 if (c) remember(msgCache, msg, extractText(c), getContentType(c));
@@ -1792,11 +1848,10 @@ async function startSession(number, res = null, opts = {}) {
                         if (seenBefore(n, msg.key.id)) continue;
                         if (mts > (lastProcessed.get(n) || 0)) {
                             lastProcessed.set(n, mts);
-                            saveLastProcessed(n, mts);
                         }
                     }
 
-                    if (msg.key.fromMe && mts && mts < bootSec) {
+                    if (msg.key.fromMe && mts && mts < bootSec - 10) {
                         try {
                             const c = normalizeMessageContent(msg.message);
                             if (c) remember(msgCache, msg, extractText(c), getContentType(c));
@@ -1823,6 +1878,7 @@ async function startSession(number, res = null, opts = {}) {
 
             if (connection === 'open') {
                 rec.attempts = 0;
+                rec.loggedOutRetries = 0;
                 bootRetry.delete(n);
                 bootSec = Math.floor(Date.now() / 1000) - 5;
                 if (rec.pairTimer) { clearTimeout(rec.pairTimer); rec.pairTimer = null; }
@@ -1840,18 +1896,16 @@ async function startSession(number, res = null, opts = {}) {
                 try {
                     userConfigs.set(n, await loadUserConfig(n));
                     await loadSchedules(n);
-
-                    // Firebase eken last-processed timestamp load karala, in-memory newer value ekata wada paraana wenna denne na
-                    const lp = await loadLastProcessed(n);
-                    lastProcessed.set(n, Math.max(lp || 0, lastProcessed.get(n) || 0, bootSec));
-
                     await addNumber(n);
                     startChannel(socket, n, rec).catch(e => console.error(`Channel start error (${n}):`, e.message));
+
+                    const cfg = cfgOf(n);
+                    const pfx = cfg.PREFIX || config.PREFIX || '.';
+
                     if (justPaired.has(n)) {
                         justPaired.delete(n);
+                        rec.notifiedBoot = true;
                         await delay(2000);
-                        const cfg = cfgOf(n);
-                        const pfx = cfg.PREFIX || config.PREFIX || '.';
                         const pw = genPassword();
                         await setPassword(n, pw);
                         await sendNotice(
@@ -1865,6 +1919,20 @@ async function startSession(number, res = null, opts = {}) {
                             cfg
                         );
                         await auth.flush();
+                    } else if (!rec.notifiedBoot) {
+                        rec.notifiedBoot = true;
+                        const count = [...plugins.keys()].filter(k => !k.startsWith('__onmsg__')).length;
+                        await delay(1500);
+                        await sendNotice(
+                            socket,
+                            jidNormalizedUser(socket.user.id),
+                            formatMessage(
+                                '✅ ʙᴏᴛ ᴜᴘᴅᴀᴛᴇᴅ & ᴏɴʟɪɴᴇ',
+                                `✨ *බොට් සාර්ථකව අප්ඩේට් වී නැවත ක්‍රියාත්මක විය!*\n\n📱 *Number:* ${n}\n🌐 *Mode:* ${cfg.mode || 'public'}\n📦 *Plugins:* ${count}\n⏰ *Time:* ${getSriLankaTimestamp()}`,
+                                cfg.BOT_FOOTER || config.BOT_FOOTER
+                            ),
+                            cfg
+                        );
                     }
                 } catch (error) {
                     console.error(`Post-connect error (${n}):`, error.message);
@@ -1886,24 +1954,37 @@ async function startSession(number, res = null, opts = {}) {
                 if (rec.stopped) return;
 
                 if (code === DisconnectReason.loggedOut) {
-                    console.log(`🚪 ${n} logged out`);
+                    rec.loggedOutRetries = (rec.loggedOutRetries || 0) + 1;
+                    if (rec.loggedOutRetries <= 3) {
+                        console.log(`⚠️ ${n} got 401/loggedOut, retrying (${rec.loggedOutRetries}/3) before deleting...`);
+                        await auth.flush();
+                        await delay(4000);
+                        if (!rec.stopped) startSession(n, null, { restart: true }).catch(() => {});
+                        return;
+                    }
+                    console.log(`🚪 ${n} permanently logged out`);
                     await fullDeleteSession(n);
                     return;
                 }
+
                 if (code === DisconnectReason.connectionReplaced) {
-                    console.log(`⚠️ ${n} replaced by another connection, not reconnecting`);
+                    console.log(`⚠️ ${n} replaced by another connection, waiting 10s to check...`);
                     await auth.flush();
+                    await delay(10000);
+                    if (!rec.stopped && !activeSockets.has(n)) {
+                        startSession(n, null, { restart: true }).catch(() => {});
+                    }
                     return;
                 }
 
                 await auth.flush();
                 rec.attempts += 1;
-                const isRestart = code === DisconnectReason.restartRequired;
-                const wait = isRestart ? 500 : Math.min(60000, 1500 * 2 ** Math.min(rec.attempts, 6));
+                const isRestart = code === DisconnectReason.restartRequired || code === DisconnectReason.timedOut;
+                const wait = isRestart ? 1000 : Math.min(30000, 1500 * 2 ** Math.min(rec.attempts, 5));
                 console.log(`🔁 ${n} closed (${code}), reconnect in ${wait}ms`);
                 await delay(wait);
                 if (rec.stopped) return;
-                startSession(n, null, { restart: isRestart }).catch(e => console.error(`Reconnect failed (${n}):`, e.message));
+                startSession(n, null, { restart: true }).catch(e => console.error(`Reconnect failed (${n}):`, e.message));
             }
         });
 
@@ -2300,7 +2381,23 @@ router.post('/admin/run', adminLimiter, adminAuth, async (req, res) => {
     const link = String((req.body && req.body.link) || '');
     const emojis = String((req.body && req.body.emojis) || '');
     try {
-        if (cmd === 'restart') { loadPlugins(); return res.send({ status: 'success', message: 'Plugins reloaded' }); }
+        if (cmd === 'restart' || cmd === 'update') {
+            const count = await performHotUpdate();
+            for (const [n, sock] of activeSockets.entries()) {
+                const cfg = cfgOf(n);
+                await sendNotice(
+                    sock,
+                    jidNormalizedUser(sock.user.id),
+                    formatMessage(
+                        '✅ ʙᴏᴛ ᴜᴘᴅᴀᴛᴇᴅ',
+                        `✨ *බොට් ඕෆ් නොවී සාර්ථකව අප්ඩේට් කරන ලදී!*\n\n📦 *Plugins:* ${count}\n⏰ *Time:* ${getSriLankaTimestamp()}`,
+                        cfg.BOT_FOOTER || config.BOT_FOOTER
+                    ),
+                    cfg
+                ).catch(() => {});
+            }
+            return res.send({ status: 'success', message: `Updated & reloaded ${count} plugins` });
+        }
         if (cmd === 'reconnect') {
             reconnectAll().then(r => console.log('Reconnect results:', JSON.stringify(r))).catch(e => console.error('Reconnect error:', e.message));
             return res.status(202).send({ status: 'started', message: 'Reconnecting in background, watch the console' });
@@ -2344,10 +2441,9 @@ router.get('/botinfo', adminOnly, (req, res) => {
     }
 });
 
-router.get('/restart-plugins', adminOnly, (req, res) => {
+router.get('/restart-plugins', adminOnly, async (req, res) => {
     try {
-        loadPlugins();
-        const count = [...plugins.keys()].filter(k => !k.startsWith('__onmsg__')).length;
+        const count = await performHotUpdate();
         res.send({ status: 'success', pluginsLoaded: count });
     } catch (e) {
         res.status(500).send({ error: e.message });
@@ -2387,6 +2483,46 @@ router.get('/getabout', adminOnly, async (req, res) => {
         res.status(500).send({ status: 'error', message: `Failed to fetch About status for ${target}.` });
     }
 });
+
+/* ------------------------------------------------------------------ */
+/*  Auto Hot-Reload Watcher (No Disconnect on File Update)             */
+/* ------------------------------------------------------------------ */
+let watchDebounce = null;
+const watchTargets = [path.join(__dirname, 'plugins'), path.join(__dirname, 'config.js')];
+
+for (const target of watchTargets) {
+    if (!fs.existsSync(target)) continue;
+    try {
+        fs.watch(target, { recursive: true }, (eventType, filename) => {
+            if (!filename || !filename.endsWith('.js')) return;
+            clearTimeout(watchDebounce);
+            watchDebounce = setTimeout(async () => {
+                try {
+                    const count = await performHotUpdate();
+                    console.log(`🔄 Auto-updated due to change in ${filename}`);
+
+                    for (const [n, sock] of activeSockets.entries()) {
+                        const cfg = cfgOf(n);
+                        await sendNotice(
+                            sock,
+                            jidNormalizedUser(sock.user.id),
+                            formatMessage(
+                                '✅ ʙᴏᴛ ᴀᴜᴛᴏ-ᴜᴘᴅᴀᴛᴇᴅ',
+                                `✨ *බොට් ඕෆ් නොවී සාර්ථකව අප්ඩේට් කරන ලදී!*\n\n📄 *File:* ${filename}\n📦 *Active Plugins:* ${count}\n🟢 *Status:* ඕෆ් නොවී දිගටම ක්‍රියාත්මකයි\n⏰ *Time:* ${getSriLankaTimestamp()}`,
+                                cfg.BOT_FOOTER || config.BOT_FOOTER
+                            ),
+                            cfg
+                        ).catch(() => {});
+                    }
+                } catch (e) {
+                    console.error('Hot-reload error:', e.message);
+                }
+            }, 2500);
+        });
+    } catch (e) {
+        console.error(`Watcher init error for ${target}:`, e.message);
+    }
+}
 
 /* ------------------------------------------------------------------ */
 /*  Startup / shutdown                                                 */
