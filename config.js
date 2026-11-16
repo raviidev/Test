@@ -2,7 +2,7 @@
 module.exports = {
     FIREBASE_URL: 'https://queen-hiru-default-rtdb.asia-southeast1.firebasedatabase.app/',
     // FIREBASE_SECRET: '',   // thiyenawa nam .env / meka haraha danna
-    BOT_NAME: 'ǫᴜᴇᴇɴ ʜɪʀᴜ ᴍᴅ </>',
+    BOT_NAME: 'ǫᴜᴇᴇɴ ʜɪʀᴜ ᴍᴅ',
     BOT_FOOTER: '© ᴘᴏᴡᴇʀᴇᴅ ʙʏ ǫᴜᴇᴇɴ ʜɪʀᴜ </>',
     PREFIX: '.',
     MAX_RETRIES: 3,
