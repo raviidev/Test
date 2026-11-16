@@ -1,30 +1,28 @@
-const fs = require('fs');
-if (fs.existsSync('config.env')) require('dotenv').config({ path: './config.env' });
-
-const bool = (v, def = 'false') => String(v ?? def).toLowerCase() === 'true';
-
+// config.js
 module.exports = {
-    // ── Bot identity & Branding (Edit here or in config.env) ──
-    BOT_NAME: process.env.BOT_NAME || 'RAVII TEST',
-    OWNER_NAME: process.env.OWNER_NAME || 'RAVII',
-    BOT_FOOTER: process.env.BOT_FOOTER || '© 2026 RAVII TEST | Powered by RAVII',
-    ALIVE_IMG: process.env.ALIVE_IMG || '',
-    PREFIX: process.env.PREFIX || '.',
-    OWNER_NUMBER: (process.env.OWNER_NUMBER || '94000000000').split(',').map(n => n.trim()),
+    FIREBASE_URL: 'https://queen-hiru-default-rtdb.asia-southeast1.firebasedatabase.app/',
+    // FIREBASE_SECRET: '',   // thiyenawa nam .env / meka haraha danna
+    BOT_NAME: 'ǫᴜᴇᴇɴ ʜɪʀᴜ ᴍᴅ </>',
+    BOT_FOOTER: '© ᴘᴏᴡᴇʀᴇᴅ ʙʏ ǫᴜᴇᴇɴ ʜɪʀᴜ </>',
+    PREFIX: '.',
+    MAX_RETRIES: 3,
+    GROUP_INVITE_LINK: 'https://chat.whatsapp.com/KOLvDIS9Btl7VK5E2dc03H?s=cl&p=a&iam=2',
+    RCD_IMAGE_PATH: 'https://file.dnuz.top/ypklg1.jpg', // bot logo
+    OTP_EXPIRY: 300000,
+    OWNER_NUMBER: '94720689634',
+    OCR_API_KEY: '', // thiyenawa nam .env / meka haraha danna
+    OMDB_API_KEY: 'c51d1824',
 
-    // ── Login ─────────────────────────────────────────────────
-    // "qr"   → scan QR (terminal + web page at /qr)
-    // "pair" → pairing code (needs PAIR_NUMBER, or you will be asked in terminal)
-    CONNECT_MODE: (process.env.CONNECT_MODE || 'qr').toLowerCase(),
-    PAIR_NUMBER: process.env.PAIR_NUMBER || '',      // e.g. 94712345678
-    WEB_PASSWORD: process.env.WEB_PASSWORD || 'RAVIIDEV', // dashboard password
-    SESSION_ID: process.env.SESSION_ID || '',        // optional MEGA session (file id#key)
-
-    // ── Behaviour ─────────────────────────────────────────────
-    MODE: process.env.MODE || 'public',              // public | private | groups | inbox
-    AUTO_READ_STATUS: bool(process.env.AUTO_READ_STATUS, 'false'),
-    ALWAYS_OFFLINE: bool(process.env.ALWAYS_OFFLINE, 'false'),
-
-    // ── Server ────────────────────────────────────────────────
-    PORT: process.env.PORT || 8000,
+    // ---- Dashboard eken maru karanna puluwan settings (default values) ----
+    AUTO_STATUS_SEEN: false,
+    AUTO_STATUS_REACT: false,
+    STATUS_EMOJIS: '💚,❤️,🔥,😍,👏,😎',
+    AUTO_READ: false,
+    ALWAYS_ONLINE: false,
+    AUTO_TYPING: false,
+    ANTI_DELETE: true,
+    ANTI_EDIT: true,
+    FORWARD_TAG: true,   // bot ge msgs channel ekak eken forward una wage pennanawa
+    NEWSLETTER_JID: '120363430608120117@newsletter',
+    ANTI_DEST: 'owner' // 'owner' = bot number eke own chat eka | 'chat' = delete/edit una chat eka
 };
