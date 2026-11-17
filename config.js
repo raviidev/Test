@@ -1,17 +1,17 @@
 // config.js
 module.exports = {
-    FIREBASE_URL: 'https://queen-hiru-default-rtdb.asia-southeast1.firebasedatabase.app/',
-    // FIREBASE_SECRET: '',   // thiyenawa nam .env / meka haraha danna
-    BOT_NAME: 'ǫᴜᴇᴇɴ ʜɪʀᴜ ᴍᴅ',
+    FIREBASE_URL: process.env.FIREBASE_URL || 'https://queen-hiru-default-rtdb.asia-southeast1.firebasedatabase.app/',
+    FIREBASE_SECRET: process.env.FIREBASE_SECRET || '',
+    BOT_NAME: 'ǫᴜᴇᴇɴ ʜɪʀᴜ ᴍᴅ </>',
     BOT_FOOTER: '© ᴘᴏᴡᴇʀᴇᴅ ʙʏ ǫᴜᴇᴇɴ ʜɪʀᴜ </>',
     PREFIX: '.',
     MAX_RETRIES: 3,
     GROUP_INVITE_LINK: 'https://chat.whatsapp.com/KOLvDIS9Btl7VK5E2dc03H?s=cl&p=a&iam=2',
     RCD_IMAGE_PATH: 'https://file.dnuz.top/ypklg1.jpg', // bot logo
     OTP_EXPIRY: 300000,
-    OWNER_NUMBER: '94720689634',
-    OCR_API_KEY: '', // thiyenawa nam .env / meka haraha danna
-    OMDB_API_KEY: 'c51d1824',
+    OWNER_NUMBER: process.env.OWNER_NUMBER || '94720689634',
+    OCR_API_KEY: process.env.OCR_API_KEY || '',
+    OMDB_API_KEY: process.env.OMDB_API_KEY || '',
 
     // ---- Dashboard eken maru karanna puluwan settings (default values) ----
     mode: 'public', // 'public' = inbox + group hamotama wada | 'private' = owner witarai

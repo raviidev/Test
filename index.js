@@ -39,17 +39,24 @@ Forward By Anuhas Bandara
 Server running on http://localhost:${PORT}`);
 });
 
-// Crash unata process eka restart karanne nathuwa log witarak karanawa
-process.on('uncaughtException', (err) => console.error('Uncaught exception:', err));
-process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err));
-
-// Stop wenakota session data Firebase ekata flush karanawa
-const shutdown = async (signal) => {
+// Flush persisted auth state once, then let the hosting supervisor restart fatal failures.
+let shuttingDown = false;
+const shutdown = async (signal, exitCode = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log(`${signal} received, saving sessions...`);
     try { await code.shutdown(); } catch (e) { console.error(e); }
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 8000).unref();
+    server.close(() => process.exit(exitCode));
+    setTimeout(() => process.exit(exitCode), 8000).unref();
 };
+process.on('uncaughtException', (err) => {
+    console.error('Fatal uncaught exception:', err);
+    shutdown('uncaughtException', 1);
+});
+process.on('unhandledRejection', (err) => {
+    console.error('Fatal unhandled rejection:', err);
+    shutdown('unhandledRejection', 1);
+});
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 

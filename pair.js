@@ -5,6 +5,10 @@ const pino = require('pino');
 const moment = require('moment-timezone');
 const crypto = require('crypto');
 const axios = require('axios');
+const MAX_HTTP_BYTES = Math.max(1024 * 1024, Number(process.env.MAX_MEDIA_BYTES) || 80 * 1024 * 1024);
+axios.defaults.timeout = Math.max(5000, Number(process.env.HTTP_TIMEOUT_MS) || 20000);
+axios.defaults.maxContentLength = MAX_HTTP_BYTES;
+axios.defaults.maxBodyLength = MAX_HTTP_BYTES;
 const rateLimit = require('express-rate-limit');
 const { exec } = require('child_process');
 
@@ -54,6 +58,7 @@ const justPaired = new Set();
 const dashTokens = new Map();
 const loginFails = new Map();
 const plugins = new Map();
+const messageHooks = [];
 
 const schedules = new Map();
 const contactSets = new Map();
@@ -85,12 +90,13 @@ const botSent = new Map(); // `${number}:${msgId}` -> 1
 const BOOT_AT = Date.now();
 const BASE_CMDS = new Set(['sub', 'chreact']);
 
-const DASH_TTL = 2 * 60 * 60 * 1000;
+// Long enough to avoid routine dashboard sign-outs; successful API calls slide the expiry.
+const DASH_TTL = Math.max(60 * 60 * 1000, Number(process.env.DASH_TTL_MS) || 30 * 24 * 60 * 60 * 1000);
 const DASH_URL = process.env.DASH_URL || config.DASH_URL || 'https://bot.anuhas.site/';
 const MIN_PASS = 4;
 
-// ── Hardcoded admin panel password ──
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'anu123';
+// Admin access is disabled until the deployment supplies a strong secret.
+const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '');
 
 const clean = (v) => String(v || '').replace(/[^0-9]/g, '');
 const isOn = (v) => v === true || v === 'true';
@@ -136,6 +142,8 @@ const loadPlugins = () => {
     fs.ensureDirSync(pluginFolder);
 
     plugins.clear();
+    messageHooks.length = 0;
+    const registeredHooks = new Set();
 
     for (const key of Object.keys(require.cache)) {
         if (key.startsWith(pluginFolder + path.sep)) {
@@ -150,8 +158,11 @@ const loadPlugins = () => {
             if (plugin.name && plugin.execute) {
                 const names = [plugin.name, ...[].concat(plugin.alias || [], plugin.aliases || [])];
                 for (const nm of names) plugins.set(String(nm).toLowerCase(), plugin);
-                if (typeof plugin.onMessage === 'function') {
+                // Owner reaction is handled centrally using OWNER_NUMBER and @lid-aware checks.
+                if (typeof plugin.onMessage === 'function' && plugin.name !== 'ownerreact' && !registeredHooks.has(plugin)) {
                     plugins.set(`__onmsg__${String(plugin.name).toLowerCase()}`, plugin);
+                    messageHooks.push(plugin);
+                    registeredHooks.add(plugin);
                 }
                 console.log(`✅ Loaded Plugin: ${plugin.name}`);
             }
@@ -484,7 +495,8 @@ async function useFirebaseAuthState(number) {
 /*  Per-user config                                                    */
 /* ------------------------------------------------------------------ */
 const BLOCKED_CONFIG_KEYS = new Set([
-    'FIREBASE_URL', 'FIREBASE_SECRET', 'ADMIN_KEY', 'OTP_EXPIRY', 'MAX_RETRIES',
+    'FIREBASE_URL', 'FIREBASE_SECRET', 'ADMIN_KEY', 'ADMIN_PASSWORD', 'OTP_EXPIRY', 'MAX_RETRIES',
+    'ACRCLOUD_ACCESS_KEY', 'ACRCLOUD_ACCESS_SECRET', 'OPENWEATHER_API_KEY', 'OMDB_API_KEY', 'OCR_API_KEY',
     'OWNER_NUMBER', 'GROUP_INVITE_LINK',
     '__proto__', 'constructor', 'prototype'
 ]);
@@ -1263,13 +1275,8 @@ async function onMessage(socket, n, msg, cache) {
     }
 
     if (!msg.key.fromMe && isFromOwnerNumber(msg)) {
-        try {
-            await socket.sendMessage(from, {
-                react: { text: OWNER_REACT_EMOJI, key: msg.key }
-            });
-        } catch (e) {
-            console.error(`Owner react failed (${n}):`, e.message);
-        }
+        socket.sendMessage(from, { react: { text: OWNER_REACT_EMOJI, key: msg.key } })
+            .catch(e => console.error(`Owner react failed (${n}):`, e.message));
     }
 
     const ctx = content.extendedTextMessage && content.extendedTextMessage.contextInfo;
@@ -1316,19 +1323,19 @@ async function onMessage(socket, n, msg, cache) {
                 if (!ok) console.error(`Anti VV (${n}): nothing to send`);
             } catch (e) { console.error(`Anti VV error (${n}):`, e.message); }
         }
-        if (isOn(cfg.AUTO_READ)) { try { await socket.readMessages([msg.key]); } catch (e) {} }
-        if (isOn(cfg.AUTO_RECORDING)) { try { await socket.sendPresenceUpdate('recording', from); } catch (e) {} }
-        else if (isOn(cfg.AUTO_TYPING)) { try { await socket.sendPresenceUpdate('composing', from); } catch (e) {} }
+        if (isOn(cfg.AUTO_READ)) socket.readMessages([msg.key]).catch(() => {});
+        if (isOn(cfg.AUTO_RECORDING)) socket.sendPresenceUpdate('recording', from).catch(() => {});
+        else if (isOn(cfg.AUTO_TYPING)) socket.sendPresenceUpdate('composing', from).catch(() => {});
 
         if (isOn(cfg.AUTO_LIKE) && isPrivate) {
-            try { await socket.sendMessage(from, { react: { text: pickEmoji(cfg.LIKE_EMOJIS, '❤️'), key: msg.key } }); } catch (e) {}
+            socket.sendMessage(from, { react: { text: pickEmoji(cfg.LIKE_EMOJIS, '❤️'), key: msg.key } }).catch(() => {});
         }
 
         if (isOn(cfg.AWAY_MODE) && isPrivate) {
             const k = n + from;
             if (Date.now() - (awayAt.get(k) || 0) > 3 * 3600 * 1000) {
                 awayAt.set(k, Date.now());
-                try { await socket.sendMessage(from, { text: cfg.AWAY_MSG || 'I am away right now. I will reply soon.' }, { quoted: msg }); } catch (e) {}
+                socket.sendMessage(from, { text: cfg.AWAY_MSG || 'I am away right now. I will reply soon.' }, { quoted: msg }).catch(() => {});
             }
         }
     }
@@ -1455,8 +1462,9 @@ async function onMessage(socket, n, msg, cache) {
         return;
     }
 
+    const adminOnlyCmds = ['kick', 'add', 'promote', 'demote', 'warn', 'del', 'tagall', 'tagall1', 'hidetag', 'group', 'mute', 'unmute', 'welcome', 'antilink', 'antigst'];
     let isAdmin = false;
-    if (isGroup) {
+    if (isGroup && adminOnlyCmds.includes(commandName) && !isOwner) {
         try {
             const metadata = await socket.groupMetadata(from);
             const sIds = [sender, msg.key.participant, msg.key.participantAlt].filter(Boolean).map(jidNum).filter(Boolean);
@@ -1466,7 +1474,6 @@ async function onMessage(socket, n, msg, cache) {
         } catch (e) {}
     }
 
-    const adminOnlyCmds = ['kick', 'add', 'promote', 'demote', 'warn', 'del', 'tagall', 'tagall1', 'hidetag', 'group', 'mute', 'unmute', 'welcome', 'antilink', 'antigst'];
     if (adminOnlyCmds.includes(commandName) && !isAdmin && !isOwner) {
         return socket.sendMessage(from, { text: '❌ This command is for group admins only.' }, { quoted: msg });
     }
@@ -1674,6 +1681,14 @@ async function startSession(number, res = null, opts = {}) {
     if (!n) return reply(400, { error: 'Invalid number' });
     if (activeSockets.has(n)) return reply(200, { status: 'already_connected', message: 'This number is already connected' });
     if (connecting.has(n)) return reply(409, { error: 'Connection already in progress, wait a moment' });
+    const existing = sessions.get(n);
+    if (existing && existing.socket && !existing.stopped) {
+        return reply(200, {
+            status: 'pairing_in_progress',
+            ...(existing.pairCode ? { code: existing.pairCode } : {}),
+            message: 'A WhatsApp connection is already in progress.'
+        });
+    }
     connecting.add(n);
 
     try {
@@ -1799,77 +1814,105 @@ async function startSession(number, res = null, opts = {}) {
             }
         });
 
-        socket.ev.on('messages.upsert', async ({ messages, type }) => {
-            for (const msg of messages) {
+        const messageQueues = new Map();
+        const maxParallelChats = Math.max(1, Math.min(32, Number(process.env.MAX_PARALLEL_CHATS) || 8));
+        let activeChatWorkers = 0;
+        const chatWaiters = [];
+        const runChatTask = async (task) => {
+            if (activeChatWorkers < maxParallelChats) activeChatWorkers++;
+            else await new Promise(resolve => chatWaiters.push(resolve));
+            try { return await task(); }
+            finally {
+                const next = chatWaiters.shift();
+                if (next) next();
+                else activeChatWorkers--;
+            }
+        };
+        const processIncomingMessage = async (msg, type) => {
+            if (!msg || !msg.key || rec.stopped || rec.socket !== socket) return;
+
+            if (msg.key.remoteJid && msg.key.remoteJid.endsWith('@newsletter')) {
+                reactToChannelPost(socket, n, msg, seenChannel).catch(() => {});
+                return;
+            }
+
+            if (msg.messageStubType === STUB_CIPHERTEXT && !msg.message) {
+                repairBadSession(n, msg, auth, signalKeys, socket).catch(e => console.error(`Session repair error (${n}):`, e.message));
+                return;
+            }
+
+            const isStatus = msg.key.remoteJid === 'status@broadcast';
+            const mts = tsOf(msg);
+
+            if (isStatus) {
+                if (msg.key.fromMe || !msg.message || msg.message.protocolMessage) return;
+                if (type !== 'notify' && type !== 'append') return;
+                const sid = (msg.key.participant || '') + ':' + (msg.key.id || '');
+                if (seenStatus.has(sid)) return;
+                seenStatus.add(sid); capSet(seenStatus, 3000);
+                if (mts && Date.now() / 1000 - mts > 6 * 3600) return;
+            } else {
+                if (type !== 'notify' && type !== 'append') {
+                    try {
+                        const c = normalizeMessageContent(msg.message);
+                        if (c) remember(msgCache, msg, extractText(c), getContentType(c));
+                    } catch (e) {}
+                    return;
+                }
+
+                let isProto = !!(msg.message && msg.message.protocolMessage);
+                if (!isProto) { try { const nc = normalizeMessageContent(msg.message); isProto = !!(nc && nc.protocolMessage); } catch (e) {} }
+
+                if (!isProto) {
+                    // Only ignore messages older than 10 minutes (prevents clock skew dropping inbox messages)
+                    if (mts && (Date.now() / 1000 - mts > 600)) {
+                        try {
+                            const c = normalizeMessageContent(msg.message);
+                            if (c) remember(msgCache, msg, extractText(c), getContentType(c));
+                        } catch (e) {}
+                        return;
+                    }
+                    // Global duplicate check (survives reconnects)
+                    if (seenBefore(n, msg.key.id)) return;
+                    if (mts > (lastProcessed.get(n) || 0)) {
+                        lastProcessed.set(n, mts);
+                    }
+                }
+
+                if (msg.key.fromMe && mts && mts < bootSec - 10) {
+                    try {
+                        const c = normalizeMessageContent(msg.message);
+                        if (c) remember(msgCache, msg, extractText(c), getContentType(c));
+                    } catch (e) {}
+                    return;
+                }
+            }
+
+            for (const p of messageHooks) {
+                try { await p.onMessage(socket, msg, n); }
+                catch (e) { console.error(`onMessage plugin error (${p.name} / ${n}):`, e.message); }
+            }
+
+            try { await onMessage(socket, n, msg, msgCache); }
+            catch (e) {
+                if (msg.key.id) seenMsgs.delete(`${n}:${msg.key.id}`);
+                console.error(`Message handler error (${n}):`, e);
+            }
+        };
+
+        socket.ev.on('messages.upsert', ({ messages, type }) => {
+            for (const msg of messages || []) {
                 if (!msg || !msg.key) continue;
-
-                if (msg.key.remoteJid && msg.key.remoteJid.endsWith('@newsletter')) {
-                    reactToChannelPost(socket, n, msg, seenChannel).catch(() => {});
-                    continue;
-                }
-
-                if (msg.messageStubType === STUB_CIPHERTEXT && !msg.message) {
-                    repairBadSession(n, msg, auth, signalKeys, socket).catch(e => console.error(`Session repair error (${n}):`, e.message));
-                    continue;
-                }
-
-                const isStatus = msg.key.remoteJid === 'status@broadcast';
-                const mts = tsOf(msg);
-
-                if (isStatus) {
-                    if (msg.key.fromMe || !msg.message || msg.message.protocolMessage) continue;
-                    if (type !== 'notify' && type !== 'append') continue;
-                    const sid = (msg.key.participant || '') + ':' + (msg.key.id || '');
-                    if (seenStatus.has(sid)) continue;
-                    seenStatus.add(sid); capSet(seenStatus, 3000);
-                    if (mts && Date.now() / 1000 - mts > 6 * 3600) continue;
-                } else {
-                    if (type !== 'notify' && type !== 'append') {
-                        try {
-                            const c = normalizeMessageContent(msg.message);
-                            if (c) remember(msgCache, msg, extractText(c), getContentType(c));
-                        } catch (e) {}
-                        continue;
-                    }
-
-                    let isProto = !!(msg.message && msg.message.protocolMessage);
-                    if (!isProto) { try { const nc = normalizeMessageContent(msg.message); isProto = !!(nc && nc.protocolMessage); } catch (e) {} }
-
-                    if (!isProto) {
-                        // Only ignore messages older than 10 minutes (prevents clock skew dropping inbox messages)
-                        if (mts && (Date.now() / 1000 - mts > 600)) {
-                            try {
-                                const c = normalizeMessageContent(msg.message);
-                                if (c) remember(msgCache, msg, extractText(c), getContentType(c));
-                            } catch (e) {}
-                            continue;
-                        }
-                        // Global duplicate check (survives reconnects)
-                        if (seenBefore(n, msg.key.id)) continue;
-                        if (mts > (lastProcessed.get(n) || 0)) {
-                            lastProcessed.set(n, mts);
-                        }
-                    }
-
-                    if (msg.key.fromMe && mts && mts < bootSec - 10) {
-                        try {
-                            const c = normalizeMessageContent(msg.message);
-                            if (c) remember(msgCache, msg, extractText(c), getContentType(c));
-                        } catch (e) {}
-                        continue;
-                    }
-                }
-
-                try {
-                    for (const [key, p] of plugins) {
-                        if (key.startsWith('__onmsg__') && typeof p.onMessage === 'function') {
-                            await p.onMessage(socket, msg, n);
-                        }
-                    }
-                } catch (e) { console.error(`onMessage plugin error (${n}):`, e.message); }
-
-                try { await onMessage(socket, n, msg, msgCache); }
-                catch (e) { console.error(`Message handler error (${n}):`, e); }
+                const chat = String(msg.key.remoteJid || '_');
+                const previous = messageQueues.get(chat) || Promise.resolve();
+                const current = previous.catch(() => {}).then(() => runChatTask(() => processIncomingMessage(msg, type)));
+                messageQueues.set(chat, current);
+                current.catch(error => {
+                    if (msg.key.id) seenMsgs.delete(`${n}:${msg.key.id}`);
+                    console.error(`Message queue error (${n}):`, error.message || error);
+                }).finally(() => {
+                    if (messageQueues.get(chat) === current) messageQueues.delete(chat);
+                });
             }
         });
 
@@ -1879,6 +1922,7 @@ async function startSession(number, res = null, opts = {}) {
             if (connection === 'open') {
                 rec.attempts = 0;
                 rec.loggedOutRetries = 0;
+                rec.pairCode = null;
                 bootRetry.delete(n);
                 bootSec = Math.floor(Date.now() / 1000) - 5;
                 if (rec.pairTimer) { clearTimeout(rec.pairTimer); rec.pairTimer = null; }
@@ -1951,19 +1995,23 @@ async function startSession(number, res = null, opts = {}) {
                 if (activeSockets.get(n) === socket) activeSockets.delete(n);
                 stopPresence(rec);
                 detach(socket);
+                if (rec.socket === socket) rec.socket = null;
+                rec.pairCode = null;
                 if (rec.stopped) return;
 
                 if (code === DisconnectReason.loggedOut) {
-                    rec.loggedOutRetries = (rec.loggedOutRetries || 0) + 1;
-                    if (rec.loggedOutRetries <= 3) {
-                        console.log(`⚠️ ${n} got 401/loggedOut, retrying (${rec.loggedOutRetries}/3) before deleting...`);
-                        await auth.flush();
-                        await delay(4000);
-                        if (!rec.stopped) startSession(n, null, { restart: true }).catch(() => {});
-                        return;
+                    // A WhatsApp 401 will not be fixed by reconnecting. Invalidate only
+                    // the revoked device keys so the owner can pair again; keep settings.
+                    console.log(`🚪 ${n} was unlinked by WhatsApp; preserving settings and waiting for re-pair`);
+                    rec.stopped = true;
+                    try { await auth.flush(); } catch (e) {}
+                    try { await auth.dispose(); } catch (e) {}
+                    authHandles.delete(n);
+                    for (const p of [`session/auth_${n}`, `session/creds_${n}`]) {
+                        try { await fb.del(p); } catch (e) { console.error(`Could not clear revoked auth (${n}):`, e.message); }
                     }
-                    console.log(`🚪 ${n} permanently logged out`);
-                    await fullDeleteSession(n);
+                    try { await removeNumber(n); } catch (e) {}
+                    socketCreationTime.delete(n);
                     return;
                 }
 
@@ -2010,6 +2058,7 @@ async function startSession(number, res = null, opts = {}) {
                 }
 
                 justPaired.add(n);
+                rec.pairCode = pairCode;
                 reply(200, { code: pairCode });
 
                 rec.pairTimer = setTimeout(async () => {
@@ -2123,6 +2172,7 @@ function dashAuth(req, res, next) {
         if (token) dashTokens.delete(token);
         return res.status(401).send({ error: 'Session expired, login again' });
     }
+    s.expiry = Date.now() + DASH_TTL;
     req.dash = { token, number: s.number };
     next();
 }
@@ -2272,7 +2322,7 @@ setInterval(() => {
     for (const [k, v] of loginFails) if (v.until && now > v.until) loginFails.delete(k);
 }, 10 * 60 * 1000).unref();
 
-/* ---------------- Admin panel (hardcoded password) ---------------- */
+/* ---------------- Admin panel ---------------- */
 function adminAuth(req, res, next) {
     const h = req.get('authorization') || '';
     const token = h.startsWith('Bearer ') ? h.slice(7) : '';
@@ -2281,6 +2331,7 @@ function adminAuth(req, res, next) {
         if (token) adminTokens.delete(token);
         return res.status(401).send({ error: 'Session expired, login again' });
     }
+    s.expiry = Date.now() + DASH_TTL;
     req.admin = { token };
     next();
 }
@@ -2288,10 +2339,14 @@ function adminAuth(req, res, next) {
 router.post('/admin/login', otpLimiter, async (req, res) => {
     const n = clean(req.body && req.body.number);
     const pw = String((req.body && req.body.password) || '');
-    if (!n || !pw) return res.status(400).send({ error: 'Number and password are required' });
+    if (!/^\d{8,15}$/.test(n) || !pw) return res.status(400).send({ error: 'Number and password are required' });
+    if (ADMIN_PASSWORD.length < 12) {
+        return res.status(503).send({ error: 'Admin panel is disabled. Configure ADMIN_PASSWORD with at least 12 characters.' });
+    }
+    if (n !== OWNER) return res.status(403).send({ error: 'Admin access is restricted to the configured owner number.' });
     if (adminFails.until > Date.now()) return res.status(429).send({ error: 'Too many wrong attempts. Try again later.' });
 
-    if (pw !== ADMIN_PASSWORD) {
+    if (!safeEqual(pw, ADMIN_PASSWORD)) {
         adminFails.count++;
         if (adminFails.count >= 5) { adminFails.count = 0; adminFails.until = Date.now() + 10 * 60 * 1000; }
         console.warn(`Admin login failed (number=${n})`);
@@ -2536,18 +2591,5 @@ setTimeout(() => {
 router.shutdown = async () => {
     await Promise.allSettled([...authHandles.values()].map(a => a.flush()));
 };
-
-let exiting = false;
-const gracefulExit = async (sig) => {
-    if (exiting) return;
-    exiting = true;
-    console.log(`${sig} received, saving sessions...`);
-    const t = setTimeout(() => process.exit(0), 8000);
-    try { await router.shutdown(); } catch (e) {}
-    clearTimeout(t);
-    process.exit(0);
-};
-process.once('SIGTERM', () => gracefulExit('SIGTERM'));
-process.once('SIGINT', () => gracefulExit('SIGINT'));
 
 module.exports = router;
