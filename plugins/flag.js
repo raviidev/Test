@@ -123,16 +123,16 @@ module.exports = {
         const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
         if (!text) return;
 
+        const chatId = msg.key.remoteJid;
+        const game = games.get(chatId);
+        if (!game) return;
+
         const messageId = msg.key?.id;
         if (!messageId) return;
         if (processedMessages.has(messageId)) return;
         
         processedMessages.add(messageId);
         setTimeout(() => { processedMessages.delete(messageId); }, 120000);
-
-        const chatId = msg.key.remoteJid;
-        const game = games.get(chatId);
-        if (!game) return;
 
         const prefix = ctx.prefix || config.PREFIX || '.';
         const sender = msg.key.participant || msg.key.remoteJid;

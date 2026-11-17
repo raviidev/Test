@@ -2,6 +2,7 @@ const axios = require('axios');
 const fs = require('fs');
 const config = require('../config');
 const { generateWAMessageFromContent, prepareWAMessageMedia } = require('@whiskeysockets/baileys');
+const MAX_MEDIA_BYTES = Math.max(1024 * 1024, Number(process.env.MAX_MEDIA_BYTES) || 80 * 1024 * 1024);
 
 /* Small caps helper */
 const SC = {
@@ -201,8 +202,8 @@ async function tryRebix(url, quality) {
     const videoResponse = await axios.get(videoData.url, { 
         responseType: 'arraybuffer', 
         timeout: 60000,
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity
+        maxContentLength: MAX_MEDIA_BYTES,
+        maxBodyLength: MAX_MEDIA_BYTES
     });
     
     return { 

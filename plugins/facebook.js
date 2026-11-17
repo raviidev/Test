@@ -21,6 +21,7 @@ const API_BASE = 'https://infinity-api.sandaliamaya2012.workers.dev';
 const OLD_API = 'https://api-rebix.zone.id/api/facebook';
 const TIMEOUT = 60000;
 const MAX_VIDEO_MB = 60;
+const MAX_MEDIA_BYTES = Math.max(1024 * 1024, Number(process.env.MAX_MEDIA_BYTES) || 80 * 1024 * 1024);
 const TTL = 5 * 60 * 1000;
 
 const QUALITIES = [
@@ -89,7 +90,19 @@ async function getJSON(url, label) {
 async function downloadBuf(url, label) {
     const res = await fetchT(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 180000);
     if (!res.ok) throw new Error(`${label}: HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
+    const declaredSize = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declaredSize) && declaredSize > MAX_MEDIA_BYTES) {
+        throw new Error(`${label}: file exceeds ${Math.round(MAX_MEDIA_BYTES / 1048576)} MB limit`);
+    }
+    if (!res.body) throw new Error(`${label}: empty response`);
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of res.body) {
+        size += chunk.length;
+        if (size > MAX_MEDIA_BYTES) throw new Error(`${label}: file exceeds ${Math.round(MAX_MEDIA_BYTES / 1048576)} MB limit`);
+        chunks.push(Buffer.from(chunk));
+    }
+    const buf = Buffer.concat(chunks, size);
     if (!buf.length) throw new Error(`${label}: empty`);
     return buf;
 }
@@ -167,8 +180,8 @@ async function tryRebix(fbUrl) {
             const videoResponse = await axios.get(videoUrl, {
                 responseType: 'arraybuffer',
                 timeout: 60000,
-                maxContentLength: Infinity,
-                maxBodyLength: Infinity
+                maxContentLength: MAX_MEDIA_BYTES,
+                maxBodyLength: MAX_MEDIA_BYTES
             });
             return { buffer: Buffer.from(videoResponse.data), title: result.metadata?.title || null };
         } catch (e) { console.error('rebix dl failed:', e.message); }

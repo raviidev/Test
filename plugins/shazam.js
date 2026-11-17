@@ -36,11 +36,15 @@ module.exports = {
 
         try { await sock.sendMessage(chatId, { react: { text: '🎵', key: msg.key } }); } catch (e) {}
 
-        // API Config eka
+        const accessKey = process.env.ACRCLOUD_ACCESS_KEY || '';
+        const accessSecret = process.env.ACRCLOUD_ACCESS_SECRET || '';
+        if (!accessKey || !accessSecret) {
+            return sock.sendMessage(chatId, { text: `❌ Shazam is not configured. Add ACRCLOUD_ACCESS_KEY and ACRCLOUD_ACCESS_SECRET to the server environment.\n\n> ${config.BOT_FOOTER}` }, { quoted: msg });
+        }
         const acr = new acrcloud({
-            host: 'identify-eu-west-1.acrcloud.com',
-            access_key: 'c33c767d683f78bd17d4bd4991955d81',
-            access_secret: 'bvgaIAEtADBTbLwiPGYlxupWqkNGIjT7J9Ag2vIu'
+            host: process.env.ACRCLOUD_HOST || 'identify-eu-west-1.acrcloud.com',
+            access_key: accessKey,
+            access_secret: accessSecret
         });
 
         // Quoted message eka ganna

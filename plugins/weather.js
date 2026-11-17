@@ -44,11 +44,11 @@ module.exports = {
         }
 
         try {
-            // OpenWeatherMap API
-            const apiKey = '2d61a72574c11c4f36173b627f8cb177'; 
-            const apiUrl = `http://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(q)}&appid=${apiKey}&units=metric`;
+            const apiKey = process.env.OPENWEATHER_API_KEY || '';
+            if (!apiKey) return await sock.sendMessage(chatId, { text: `❌ Weather is not configured. Add OPENWEATHER_API_KEY to the server environment.\n\n> ${config.BOT_FOOTER}` }, { quoted: msg });
+            const apiUrl = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(q)}&appid=${apiKey}&units=metric`;
             
-            const response = await axios.get(apiUrl);
+            const response = await axios.get(apiUrl, { timeout: 15000 });
             const data = response.data;
 
             const responseText = `┌─ム ${getTitle('weather')}\n\n` +
