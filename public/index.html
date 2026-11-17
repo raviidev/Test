@@ -233,7 +233,7 @@ const FEATURES = [
   ['security','Anti delete','Restore messages after they are deleted'],
   ['security','Anti edit','See the original text before an edit'],
   ['security','Anti view once','Save view once media before it expires'],
-  ['security','View once emoji reply','Reply with an emoji to get it in your inbox'],
+  ['security','View once emoji reply',"Reply with an emoji to send it to your bot's own WhatsApp chat"],
   ['security','Anti call','Automatically reject incoming calls'],
   ['security','Anti link','Block and remove links from chats'],
   ['security','Anti spam','Detect and mute spam senders'],
@@ -355,13 +355,14 @@ $('pbtn').onclick = async () => {
   try {
     const d = await api('?number=' + encodeURIComponent(number));
     if (d.status === 'already_connected') say('pout', 'Already connected. Open the control panel.', 'ok');
+    else if (d.status === 'pairing_in_progress' && !d.code) say('pout', 'A connection is already being prepared. Wait a few seconds and try again.', '');
     else if (d.code) {
       const code = String(d.code).replace(/[^A-Za-z0-9-]/g, '');
       const box = document.createElement('div'); box.className = 'code'; box.textContent = code; box.title = 'Tap to copy';
       box.onclick = async () => { try { await navigator.clipboard.writeText(code); toast('Code copied'); } catch (e) { toast('Copy it manually'); } };
       const h = document.createElement('span'); h.className = 'chint'; h.textContent = 'Tap to copy. Expires in 3 minutes.';
       $('pout').className = 'out'; $('pout').replaceChildren(box, h);
-    }
+    } else say('pout', 'The server returned an unexpected pairing response. Please try again.', 'e');
   } catch (e) { say('pout', e.message, 'e'); }
   busy = false; $('pbtn').disabled = false;
 };

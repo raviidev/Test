@@ -102,7 +102,7 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let token = null;
-try { token = sessionStorage.getItem('nomo_admin'); } catch (e) {}
+try { token = localStorage.getItem('nomo_admin'); } catch (e) {}
 function toast(t) { const el = $('toast'); el.textContent = t; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2600); }
 function say(id, t, c) { const el = $(id); el.textContent = t || ''; el.className = 'out' + (c ? ' ' + c : ''); }
 async function api(path, method = 'GET', body) {
@@ -115,7 +115,7 @@ const fmtUp = (s) => { const d = Math.floor(s / 86400), h = Math.floor(s % 86400
 let timers = [];
 function stopTimers() { timers.forEach(clearInterval); timers = []; }
 function lockUI(msg) {
-  token = null; try { sessionStorage.removeItem('nomo_admin'); } catch (e) {}
+  token = null; try { localStorage.removeItem('nomo_admin'); } catch (e) {}
   stopTimers(); $('lock').classList.remove('hide'); $('app').classList.add('hide'); $('logout').classList.add('hide');
   if (msg) say('lmsg', msg, 'e');
 }
@@ -127,7 +127,7 @@ async function login() {
   $('vbtn').disabled = true; say('lmsg', 'Checking…');
   try {
     const d = await api('/admin/login', 'POST', { number, password });
-    token = d.token; try { sessionStorage.setItem('nomo_admin', token); } catch (e) {}
+    token = d.token; try { localStorage.setItem('nomo_admin', token); } catch (e) {}
     $('lpass').value = ''; say('lmsg', ''); start();
   } catch (e) { say('lmsg', e.message, 'e'); }
   $('vbtn').disabled = false;
@@ -207,17 +207,18 @@ async function openEdit(n) {
 $('srefresh').onclick = loadSessions;
 
 /* console */
-let lastId = 0, paused = false;
+let lastId = 0, paused = false, logPollInFlight = false;
 $('pause').onclick = () => { paused = !paused; $('pause').textContent = paused ? 'Resume' : 'Pause'; };
 $('cclear').onclick = async () => { try { await api('/admin/run', 'POST', { cmd: 'clearlogs' }); $('con').replaceChildren(); } catch (e) { guard(e); } };
 $('lvl').onchange = () => { $('con').replaceChildren(); lastId = 0; pollLogs(); };
 async function pollLogs() {
-  if (paused) return;
+  if (paused || logPollInFlight || !token) return;
+  logPollInFlight = true;
   try {
     const d = await api('/admin/logs?since=' + lastId), con = $('con'), want = $('lvl').value;
     const stick = con.scrollTop + con.clientHeight >= con.scrollHeight - 30;
     d.logs.forEach(l => {
-      lastId = l.id;
+      lastId = Math.max(lastId, Number(l.id) || 0);
       if (want && l.level !== want) return;
       const el = document.createElement('span'); el.className = 'l';
       const t = document.createElement('span'); t.className = 't'; t.textContent = new Date(l.t).toLocaleTimeString() + ' ';
@@ -227,6 +228,7 @@ async function pollLogs() {
     while (con.children.length > 600) con.removeChild(con.firstChild);
     if (stick) con.scrollTop = con.scrollHeight;
   } catch (e) { guard(e); }
+  finally { logPollInFlight = false; }
 }
 
 /* owner commands */

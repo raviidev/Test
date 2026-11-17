@@ -165,7 +165,7 @@
     <label class="tile"><input type="checkbox" id="ANTI_EDIT"><span><b>Anti edit</b><small>Show the old and new text of edits</small></span><span class="sw2"></span></label>
     <label class="tile"><input type="checkbox" id="ANTI_VIEWONCE"><span><b>View once recovery</b><small>Save view once media automatically</small></span><span class="sw2"></span></label>
     <label class="tile"><input type="checkbox" id="ANTI_CALL"><span><b>Anti call</b><small>Reject incoming calls</small></span><span class="sw2"></span></label>
-    <label class="tile"><input type="checkbox" id="VV_EMOJI_REPLY"><span><b>View once emoji reply</b><small>Reply with an emoji to send it to your inbox</small></span><span class="sw2"></span></label>
+    <label class="tile"><input type="checkbox" id="VV_EMOJI_REPLY"><span><b>View once emoji reply</b><small>Reply with an emoji to send it to your bot's own WhatsApp chat</small></span><span class="sw2"></span></label>
    </div>
    <div class="in"><label for="VV_EMOJIS">Trigger emojis (empty = any emoji)</label><input id="VV_EMOJIS" placeholder="😍,🔥,👀"/></div>
    <div class="in"><span class="lab">Send notices to</span>
@@ -246,14 +246,18 @@ const TEXTS = ['BOT_NAME','BOT_FOOTER','RCD_IMAGE_PATH','PREFIX','STATUS_EMOJIS'
 const SC = {a:'ᴀ',b:'ʙ',c:'ᴄ',d:'ᴅ',e:'ᴇ',f:'ꜰ',g:'ɢ',h:'ʜ',i:'ɪ',j:'ᴊ',k:'ᴋ',l:'ʟ',m:'ᴍ',n:'ɴ',o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',s:'s',t:'ᴛ',u:'ᴜ',v:'ᴠ',w:'ᴡ',x:'x',y:'ʏ',z:'ᴢ'};
 const sc = (s) => String(s).toLowerCase().replace(/[a-z]/g, (c) => SC[c]);
 let token = null, snap = '', myNumber = '';
-try { token = sessionStorage.getItem('nomo_token'); } catch (e) {}
+try { token = localStorage.getItem('nomo_token'); } catch (e) {}
 
 function toast(t) { const el = $('toast'); el.textContent = t; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2600); }
 function say(id, text, cls) { const el = $(id); el.textContent = text || ''; el.className = 'out' + (cls ? ' ' + cls : ''); }
 async function api(path, method = 'GET', body) {
   const r = await fetch('/code' + path, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: body ? JSON.stringify(body) : undefined });
   let d = {}; try { d = await r.json(); } catch (e) {}
-  if (!r.ok) { const e = new Error(d.error || 'Request failed'); e.status = r.status; throw e; }
+  if (!r.ok) {
+    const e = new Error(d.error || 'Request failed'); e.status = r.status;
+    if (r.status === 401 && token) { lockUI(); say('lmsg', 'Session expired. Log in again.', 'e'); }
+    throw e;
+  }
   return d;
 }
 const upText = (s) => Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm';
@@ -333,7 +337,7 @@ async function doLogin() {
   $('vbtn').disabled = true; say('lmsg', 'Checking…', '');
   try {
     const d = await api('/dash/login', 'POST', { number, password });
-    token = d.token; try { sessionStorage.setItem('nomo_token', token); } catch (e) {}
+    token = d.token; try { localStorage.setItem('nomo_token', token); } catch (e) {}
     $('lpass').value = ''; say('lmsg', ''); load();
   } catch (e) { say('lmsg', e.message, 'e'); }
   $('vbtn').disabled = false;
@@ -342,7 +346,7 @@ $('vbtn').onclick = doLogin;
 $('lpass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
 
 function lockUI() {
-  token = null; try { sessionStorage.removeItem('nomo_token'); } catch (e) {}
+  token = null; try { localStorage.removeItem('nomo_token'); } catch (e) {}
   $('lock').classList.remove('hide'); $('app').classList.add('hide'); $('logout').classList.add('hide');
   $('savebar').classList.remove('on'); $('lpass').value = '';
 }
@@ -396,7 +400,8 @@ async function loadSched() {
     d.schedules.forEach(s => {
       const row = document.createElement('div'); row.className = 'srow';
       const info = document.createElement('div');
-      const b = document.createElement('b'); b.textContent = s.kind === 'status' ? '📢 Status' : '💬 ' + s.to.split('@')[0];
+      const recipient = typeof s.to === 'string' ? s.to.split('@')[0] : 'Unknown recipient';
+      const b = document.createElement('b'); b.textContent = s.kind === 'status' ? '📢 Status' : '💬 ' + recipient;
       const sm = document.createElement('small');
       sm.textContent = new Date(s.at).toLocaleString() + (s.repeat === 'daily' ? ' · daily' : '') + ' · ' + (s.text || '(image)').slice(0, 40);
       info.append(b, sm);
